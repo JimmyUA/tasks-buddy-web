@@ -12,7 +12,8 @@ let mockTasks = [
     processedDescription: 'Prep Monday presentation slides',
     priority: 'High',
     tags: ['work', 'urgent', 'meeting'],
-    createdAt: new Date(Date.now() - 86400000).toISOString()
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
+    completed: false // Add completion status
   }, // ~1 day ago
   {
     id: '4',
@@ -20,7 +21,8 @@ let mockTasks = [
     processedDescription: 'Follow up on Acme Corp email',
     priority: 'High',
     tags: ['work', 'client'],
-    createdAt: new Date(Date.now() - 3600000).toISOString()
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    completed: false // Add completion status
   }, // ~1 hour ago (Newer High Prio)
   {
     id: '2',
@@ -28,7 +30,8 @@ let mockTasks = [
     processedDescription: 'Buy milk, groceries, eggs, and bread',
     priority: 'Medium',
     tags: ['personal', 'errands'],
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    completed: false // Add completion status
   }, // Now
   {
     id: '5',
@@ -36,7 +39,8 @@ let mockTasks = [
     processedDescription: 'Book dentist check-up',
     priority: null,
     tags: ['personal', 'health'],
-    createdAt: new Date(Date.now() - 2 * 86400000).toISOString()
+    createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+    completed: true // Add completion status (example)
   }, // ~2 days ago (No priority)
   {
     id: '3',
@@ -44,7 +48,8 @@ let mockTasks = [
     processedDescription: 'Draft AI blog post',
     priority: 'Low',
     tags: ['work', 'writing'],
-    createdAt: new Date(Date.now() - 172800000).toISOString()
+    createdAt: new Date(Date.now() - 172800000).toISOString(),
+    completed: false // Add completion status
   }, // ~2 days ago
   {
     id: '6',
@@ -52,7 +57,8 @@ let mockTasks = [
     processedDescription: 'Call Bob (Project Zephyr)',
     priority: 'Medium',
     tags: ['work', 'meeting'],
-    createdAt: new Date(Date.now() - 4 * 3600000).toISOString()
+    createdAt: new Date(Date.now() - 4 * 3600000).toISOString(),
+    completed: false // Add completion status
   } // ~4 hours ago
 ];
 let nextId = 7;
@@ -136,10 +142,19 @@ export const fetchTasks = () => {
 export const addTask = (rawInput) => {
   return request('/tasks/', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'}, // Need this header even for mock if parsing body
+    // Note: 'Content-Type' is set in the request helper now
     body: JSON.stringify({rawInput}),
   });
 };
+
+export const updateTaskCompletion = (taskId, completed) => {
+  console.log(`API call: Updating task ${taskId} completion to ${completed}`);
+  return request(`/tasks/${taskId}/complete`, {
+    method: 'PUT',
+    body: JSON.stringify({ completed }), // Send body as {"completed": boolean}
+  });
+};
+
 
 // Add functions for login, signup, preferences later
 // export const login = (credentials) => request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) });

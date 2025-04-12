@@ -1,16 +1,17 @@
 // src/App.jsx
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AddTaskForm from './components/AddTaskForm';
 import TaskList from './components/TaskList';
 import TaskControls from './components/TaskControls';
-import {addTask, fetchTasks} from './services/api';
+// Import the new API function
+import { addTask, fetchTasks, updateTaskCompletion } from './services/api';
 import './App.css';
 // --- Import Firebase Auth ---
-import {auth} from './firebaseConfig';
-import {GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut} from "firebase/auth";
+import { auth } from './firebaseConfig';
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 
 // Define priority order helper
-const priorityOrder = {'High': 1, 'Medium': 2, 'Low': 3};
+const priorityOrder = { 'High': 1, 'Medium': 2, 'Low': 3 };
 const getPriorityValue = (priority) => priorityOrder[priority] || 99;
 
 function App() {
@@ -18,17 +19,13 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState(null);
-  // --- REMOVE THIS LINE ---
-  // const [isAuthenticated, setIsAuthenticated] = useState(true); // REMOVE - No longer needed
-
-  // --- USE THESE INSTEAD ---
   const [currentUser, setCurrentUser] = useState(null); // Store REAL user object or null
   const [authLoading, setAuthLoading] = useState(true); // Track initial auth state loading
 
   const [sortCriteria, setSortCriteria] = useState('priority');
   const [activeTags, setActiveTags] = useState([]);
 
-  // --- Effect to listen for Auth State Changes (Correct) ---
+  // --- Effect to listen for Auth State Changes ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       console.log("Auth State Changed:", user ? `User: ${user.uid}` : "No User");
@@ -38,7 +35,7 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- loadTasks (Correct - depends on currentUser) ---
+  // --- loadTasks ---
   const loadTasks = useCallback(async () => {
     if (!currentUser) {
       setTasks([]);
@@ -49,7 +46,9 @@ function App() {
     try {
       console.log("Attempting to fetch tasks for user:", currentUser.uid);
       const fetchedTasks = await fetchTasks();
-      setTasks(fetchedTasks || []);
+      // Ensure completed field is always present and boolean for consistency
+      const tasksWithCompletion = fetchedTasks.map(task => ({ ...task, completed: !!task.completed }));
+      setTasks(tasksWithCompletion || []);
     }
     catch (err) {
       setError(err.message || 'Failed to fetch tasks.');
@@ -63,7 +62,7 @@ function App() {
     }
   }, [currentUser]);
 
-  // --- Reload tasks when user logs in (Correct) ---
+  // --- Reload tasks when user logs in ---
   useEffect(() => {
     if (currentUser) {
       loadTasks();
@@ -74,7 +73,7 @@ function App() {
     }
   }, [currentUser, loadTasks]);
 
-  // --- Add Task Handler (Correct - checks currentUser) ---
+  // --- Add Task Handler ---
   const handleAddTask = async (rawInput) => {
     if (!currentUser) {
       setError("Please log in to add tasks.");
@@ -84,17 +83,61 @@ function App() {
     setError(null);
     try {
       const newTask = await addTask(rawInput);
-      setTasks(prevTasks => [newTask, ...prevTasks]);
+      // Ensure new task has completed field
+      setTasks(prevTasks => [{ ...newTask, completed: !!newTask.completed }, ...prevTasks]);
     }
     catch (err) {
       setError(err.message || 'Failed to add task.');
       console.error("Add task error:", err);
-      loadTasks();
+      // Consider reloading tasks on add failure to ensure consistency
+      // loadTasks();
     }
     finally {
       setIsAdding(false);
     }
   };
+
+  // --- Task Completion Handler (Optimistic Update) ---
+  const handleToggleComplete = async (taskId, newCompletedStatus) => {
+    if (!currentUser) {
+      setError("Please log in to update tasks.");
+      return;
+    }
+
+    const taskIndex = tasks.findIndex(t => t.id === taskId);
+    if (taskIndex === -1) return; // Task not found locally
+
+    const originalTasks = [...tasks];
+    const originalTask = tasks[taskIndex];
+
+    // Optimistic UI update
+    const updatedTasks = [...tasks];
+    updatedTasks[taskIndex] = { ...originalTask, completed: newCompletedStatus };
+    setTasks(updatedTasks);
+    setError(null); // Clear previous errors
+
+    try {
+      // Make the API call
+      const updatedTaskFromServer = await updateTaskCompletion(taskId, newCompletedStatus);
+      // Update local state with server response (includes updatedAt)
+      setTasks(prevTasks => {
+          const finalTasks = [...prevTasks];
+          const idx = finalTasks.findIndex(t => t.id === taskId);
+          if (idx !== -1) {
+              finalTasks[idx] = { ...updatedTaskFromServer, completed: !!updatedTaskFromServer.completed }; // Ensure boolean
+          }
+          return finalTasks;
+      });
+
+    } catch (err) {
+      console.error("Failed to update task completion:", err);
+      setError(err.message || 'Failed to update task status.');
+      // Revert UI on error
+      setTasks(originalTasks);
+    }
+  };
+  // --- End Task Completion Handler ---
+
 
   // --- Calculate derived state: all unique tags ---
   const allTags = useMemo(() => {
@@ -104,6 +147,7 @@ function App() {
     });
     return Array.from(tagSet).sort(); // Return sorted array of unique tags
   }, [tasks]);
+
   // --- Calculate derived state: filtered and sorted tasks ---
   const filteredAndSortedTasks = useMemo(() => {
     let processedTasks = [...tasks];
@@ -111,12 +155,17 @@ function App() {
     // 1. Filter by active tags
     if (activeTags.length > 0) {
       processedTasks = processedTasks.filter(task =>
-                                                 activeTags.every(activeTag => task.tags?.includes(activeTag))
+        activeTags.every(activeTag => task.tags?.includes(activeTag))
       );
     }
 
     // 2. Sort based on criteria
     processedTasks.sort((a, b) => {
+      // Put completed tasks at the bottom, regardless of sort criteria
+      if (a.completed !== b.completed) {
+        return a.completed ? 1 : -1;
+      }
+
       switch (sortCriteria) {
         case 'newest':
           return new Date(b.createdAt) - new Date(a.createdAt);
@@ -134,21 +183,17 @@ function App() {
     return processedTasks;
   }, [tasks, sortCriteria, activeTags]); // Recalculate when these change
 
-  // --- Control Handlers (Correct) ---
+  // --- Control Handlers ---
   const handleSortChange = (newCriteria) => { setSortCriteria(newCriteria); };
   const handleTagToggle = (tagToToggle) => {
-    // Special case: null means clear all filters
     if (tagToToggle === null) {
       setActiveTags([]);
       return;
     }
-
     setActiveTags(prevTags => {
       if (prevTags.includes(tagToToggle)) {
-        // Remove tag if already active
         return prevTags.filter(t => t !== tagToToggle);
       } else {
-        // Add tag if not active
         return [...prevTags, tagToToggle];
       }
     });
@@ -158,15 +203,14 @@ function App() {
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
     try {
-      setAuthLoading(true); // Show loading during popup
+      setAuthLoading(true);
       await signInWithPopup(auth, provider);
-      // onAuthStateChanged will handle setting the user state
       console.log("Google Sign-In Successful");
     }
     catch (error) {
       console.error("Google Sign-In Error:", error);
       setError(`Login failed: ${error.message}`);
-      setAuthLoading(false); // Hide loading on error
+      setAuthLoading(false);
     }
   };
 
@@ -174,10 +218,10 @@ function App() {
     try {
       await signOut(auth);
       console.log("Sign-Out successful");
-      // onAuthStateChanged will set currentUser to null
-      setTasks([]); // Explicitly clear tasks UI immediately
+      setTasks([]);
       setActiveTags([]);
       setSortCriteria('priority');
+      setError(null); // Clear any errors on logout
     }
     catch (error) {
       console.error("Sign-Out Error:", error);
@@ -186,65 +230,58 @@ function App() {
   };
   // --- End Firebase Auth Handlers ---
 
-  // --- Render Loading state (Correct) ---
+  // --- Render Loading state ---
   if (authLoading) {
     return <div className="App"><p>Loading Authentication...</p></div>;
   }
 
-  // --- CORRECTED RETURN STATEMENT ---
   return (
-      <div className="App">
-        <header className="App-header">
-          <h1>AI Task Planner</h1>
-          {/* --- Use currentUser to determine UI --- */}
-          {currentUser ? (
-              <div style={{float: 'right', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                {/* Display user info if available */}
-                <span style={{fontSize: '0.9em'}}>{currentUser.displayName || currentUser.email}</span>
-                <button onClick={handleLogout}>Logout</button>
-              </div>
-          ) : (
-               // Show Login button if no user is logged in
-               <button onClick={handleLogin} style={{float: 'right'}}>Login with Google</button>
-           )}
-        </header>
+    <div className="App">
+      <header className="App-header">
+        <h1>AI Task Planner</h1>
+        {currentUser ? (
+          <div style={{ float: 'right', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '0.9em' }}>{currentUser.displayName || currentUser.email}</span>
+            <button onClick={handleLogout}>Logout</button>
+          </div>
+        ) : (
+          <button onClick={handleLogin} style={{ float: 'right' }}>Login with Google</button>
+        )}
+      </header>
 
-        <main>
-          {/* --- Use currentUser to determine UI --- */}
-          {!currentUser ? (
-              // Show login prompt if no user
-              <div>
-                <h2>Please Log In</h2>
-                <p>Log in to manage your tasks.</p>
-                {/* Show login specific errors if any */}
-                {error && error.toLowerCase().includes('login failed') && <p style={{color: 'red'}}>{error}</p>}
-              </div>
-          ) : (
-               // Show task management UI if user is logged in
-               <>
-                 <h2>Add New Task</h2>
-                 <AddTaskForm onAddTask={handleAddTask} isAdding={isAdding}/>
+      <main>
+        {!currentUser ? (
+          <div>
+            <h2>Please Log In</h2>
+            <p>Log in to manage your tasks.</p>
+            {error && error.toLowerCase().includes('login failed') && <p style={{ color: 'red' }}>{error}</p>}
+          </div>
+        ) : (
+          <>
+            <h2>Add New Task</h2>
+            <AddTaskForm onAddTask={handleAddTask} isAdding={isAdding} />
 
-                 {/* Show general errors if any (and not a login error) */}
-                 {error && !error.toLowerCase().includes('login failed') && <p style={{color: 'red'}}>Error: {error}</p>}
+            {/* Display general errors */} 
+            {error && !error.toLowerCase().includes('login failed') && <p style={{ color: 'red' }}>Error: {error}</p>}
 
-                 <TaskControls
-                     allTags={allTags}
-                     sortCriteria={sortCriteria}
-                     activeTags={activeTags}
-                     onSortChange={handleSortChange}
-                     onTagToggle={handleTagToggle}
-                 />
+            <TaskControls
+              allTags={allTags}
+              sortCriteria={sortCriteria}
+              activeTags={activeTags}
+              onSortChange={handleSortChange}
+              onTagToggle={handleTagToggle}
+            />
 
-                 <h2>Your Tasks ({filteredAndSortedTasks.length})</h2>
-                 <TaskList
-                     tasks={filteredAndSortedTasks}
-                     isLoading={isLoading || isAdding}
-                 />
-               </>
-           )}
-        </main>
-      </div>
+            <h2>Your Tasks ({filteredAndSortedTasks.length})</h2>
+            <TaskList
+              tasks={filteredAndSortedTasks}
+              isLoading={isLoading || isAdding} // Show loading during fetch or add
+              onToggleComplete={handleToggleComplete} // Pass the handler down
+            />
+          </>
+        )}
+      </main>
+    </div>
   );
 }
 
